@@ -82,3 +82,105 @@ export function movePiece(state, piece, destination) {
 export function isSolved(board) {
   return board.length > 0 && board.every((piece, index) => piece === index)
 }
+
+export function computeLayout(grid, winW, winH) {
+  const availW = Math.max(200, winW * 0.82)
+  const availH = Math.max(200, winH * 0.78)
+  const pieceSize = Math.max(28, Math.min(availW / grid.cols, availH / grid.rows, 160))
+  const boardW = grid.cols * pieceSize
+  const boardH = grid.rows * pieceSize
+  const boardX = (winW - boardW) / 2
+  const boardY = (winH - boardH) / 2 + 10
+  return { pieceSize, boardW, boardH, boardX, boardY }
+}
+
+/**
+ * Adjusts piece coordinates to fit within a reduced viewport (e.g. when opening a terminal),
+ * while preserving each piece's unconstrained original spot (origX, origY) so they return
+ * back to their exact spots once the viewport expands back.
+ */
+export function adjustPiecesForViewport(pieces, grid, winW, winH) {
+  const layout = computeLayout(grid, winW, winH)
+  const maxAllowedX = Math.max(12, winW - layout.pieceSize - 12)
+  const maxAllowedY = Math.max(50, winH - layout.pieceSize - 18)
+
+  const groupMap = new Map()
+  for (const p of pieces) {
+    if (!groupMap.has(p.groupId)) {
+      groupMap.set(p.groupId, [])
+    }
+    groupMap.get(p.groupId).push(p)
+  }
+
+  const result = []
+
+  for (const [groupId, groupPieces] of groupMap.entries()) {
+    if (groupId === 0) {
+      // Solved board group: always lock directly to current board slots
+      for (const p of groupPieces) {
+        const col = p.id % grid.cols
+        const row = Math.floor(p.id / grid.cols)
+        const targetX = layout.boardX + col * layout.pieceSize
+        const targetY = layout.boardY + row * layout.pieceSize
+        result.push({
+          ...p,
+          x: targetX,
+          y: targetY,
+          origX: targetX,
+          origY: targetY,
+        })
+      }
+      continue
+    }
+
+    // Free pieces and clusters
+    let minOrigX = Infinity
+    let maxOrigX = -Infinity
+    let minOrigY = Infinity
+    let maxOrigY = -Infinity
+
+    for (const p of groupPieces) {
+      const ox = typeof p.origX === 'number' ? p.origX : p.x
+      const oy = typeof p.origY === 'number' ? p.origY : p.y
+      if (ox < minOrigX) minOrigX = ox
+      if (ox > maxOrigX) maxOrigX = ox
+      if (oy < minOrigY) minOrigY = oy
+      if (oy > maxOrigY) maxOrigY = oy
+    }
+
+    let shiftX = 0
+    let shiftY = 0
+
+    // If group exceeds right screen boundary, shift left
+    if (maxOrigX > maxAllowedX) {
+      shiftX = maxAllowedX - maxOrigX
+    }
+    if (minOrigX + shiftX < 12) {
+      shiftX = 12 - minOrigX
+    }
+
+    // If group exceeds bottom boundary (e.g. terminal open), shift up together
+    if (maxOrigY > maxAllowedY) {
+      shiftY = maxAllowedY - maxOrigY
+    }
+    if (minOrigY + shiftY < 50) {
+      shiftY = 50 - minOrigY
+    }
+
+    for (const p of groupPieces) {
+      const ox = typeof p.origX === 'number' ? p.origX : p.x
+      const oy = typeof p.origY === 'number' ? p.origY : p.y
+      result.push({
+        ...p,
+        origX: ox,
+        origY: oy,
+        x: ox + shiftX,
+        y: oy + shiftY,
+      })
+    }
+  }
+
+  result.sort((a, b) => a.id - b.id)
+  return result
+}
+

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addBucket, deleteBucket, generateGridOptions, isSolved, movePiece, renameBucket } from './puzzleModel.js'
+import { addBucket, adjustPiecesForViewport, deleteBucket, generateGridOptions, isSolved, movePiece, renameBucket } from './puzzleModel.js'
 
 test('square images offer square grids from about 50 to 1000 pieces', () => {
   const options = generateGridOptions(1000, 1000)
@@ -72,3 +72,53 @@ test('movePiece can sort a piece into a named bucket', () => {
   assert.deepEqual(next.tray, [1])
   assert.deepEqual(next.buckets[0].pieces, [0])
 })
+
+test('adjustPiecesForViewport shifts pieces when terminal opens and restores original spots when terminal closes', () => {
+  const grid = { rows: 8, cols: 8, count: 64 }
+  const initialPieces = [
+    { id: 0, x: 200, y: 650, origX: 200, origY: 650, groupId: 1, zIndex: 2 },
+    { id: 1, x: 400, y: 150, origX: 400, origY: 150, groupId: 2, zIndex: 3 },
+  ]
+
+  // Normal window: 1200 x 800
+  const normal = adjustPiecesForViewport(initialPieces, grid, 1200, 800)
+  assert.equal(normal[0].y, 650)
+  assert.equal(normal[1].y, 150)
+
+  // Terminal opens: height drops to 400
+  const terminalOpen = adjustPiecesForViewport(normal, grid, 1200, 400)
+  // Piece at y=650 should be shifted up to remain visible
+  assert.ok(terminalOpen[0].y < 400)
+  // But its origY must remain 650!
+  assert.equal(terminalOpen[0].origY, 650)
+
+  // Terminal closes: height returns to 800
+  const terminalClosed = adjustPiecesForViewport(terminalOpen, grid, 1200, 800)
+  // Piece must return to its exact original spot!
+  assert.equal(terminalClosed[0].x, 200)
+  assert.equal(terminalClosed[0].y, 650)
+  assert.equal(terminalClosed[1].x, 400)
+  assert.equal(terminalClosed[1].y, 150)
+})
+
+test('adjustPiecesForViewport preserves cluster distances during and after viewport resizing', () => {
+  const grid = { rows: 8, cols: 8, count: 64 }
+  // Cluster of two pieces separated by 50px vertically
+  const cluster = [
+    { id: 0, x: 300, y: 580, origX: 300, origY: 580, groupId: 5, zIndex: 2 },
+    { id: 1, x: 300, y: 630, origX: 300, origY: 630, groupId: 5, zIndex: 2 },
+  ]
+
+  // Terminal opens: height drops to 380
+  const shifted = adjustPiecesForViewport(cluster, grid, 1200, 380)
+  // Both pieces must shift by the exact same amount, preserving their 50px delta
+  const deltaShifted = shifted[1].y - shifted[0].y
+  assert.equal(deltaShifted, 50)
+
+  // Terminal closes: height expands back to 800
+  const restored = adjustPiecesForViewport(shifted, grid, 1200, 800)
+  assert.equal(restored[0].y, 580)
+  assert.equal(restored[1].y, 630)
+  assert.equal(restored[1].y - restored[0].y, 50)
+})
+

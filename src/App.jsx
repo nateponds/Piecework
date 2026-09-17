@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { generateGridOptions } from './puzzleModel.js'
+import { adjustPiecesForViewport, computeLayout, generateGridOptions } from './puzzleModel.js'
+import { getIndexedDbItem, loadGameStateSync, saveGameState } from './storage.js'
 import './App.css'
 
 const DEFAULT_IMAGE = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900"><defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#f5c975"/><stop offset="1" stop-color="#f4eee3"/></linearGradient></defs><rect width="900" height="900" fill="url(#sky)"/><circle cx="700" cy="190" r="86" fill="#fff4bf"/><path d="M0 590 210 345 390 525 555 270 900 610V900H0Z" fill="#49655d"/><path d="m390 525 165-255 100 148-49-18-51 52-55-36-64 167Z" fill="#f8f3e8"/><path d="M0 680c165-72 278-57 421 8 151 69 284 21 479-44v256H0Z" fill="#cf5d45"/><path d="M0 748c197-62 331-34 468 22 133 54 264 38 432-20v150H0Z" fill="#eaa85e"/><circle cx="175" cy="190" r="48" fill="#2f4b45" opacity=".85"/><path d="M175 230v210" stroke="#2f4b45" stroke-width="24"/></svg>`)}`
@@ -93,16 +94,6 @@ function JigsawPiece({ piece, grid, image, instanceKey }) {
   )
 }
 
-const computeLayout = (grid, winW, winH) => {
-  const availW = Math.max(200, winW * 0.82)
-  const availH = Math.max(200, winH * 0.78)
-  const pieceSize = Math.max(28, Math.min(availW / grid.cols, availH / grid.rows, 160))
-  const boardW = grid.cols * pieceSize
-  const boardH = grid.rows * pieceSize
-  const boardX = (winW - boardW) / 2
-  const boardY = (winH - boardH) / 2 + 10
-  return { pieceSize, boardW, boardH, boardX, boardY }
-}
 
 const createInitialPieces = (grid, winW, winH) => {
   const { pieceSize, boardX, boardY } = computeLayout(grid, winW, winH)
@@ -110,10 +101,14 @@ const createInitialPieces = (grid, winW, winH) => {
   for (let i = 0; i < grid.count; i++) {
     const col = i % grid.cols
     const row = Math.floor(i / grid.cols)
+    const x = boardX + col * pieceSize
+    const y = boardY + row * pieceSize
     list.push({
       id: i,
-      x: boardX + col * pieceSize,
-      y: boardY + row * pieceSize,
+      x,
+      y,
+      origX: x,
+      origY: y,
       groupId: 0,
       zIndex: 1,
     })
@@ -121,9 +116,10 @@ const createInitialPieces = (grid, winW, winH) => {
   return list
 }
 
-const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize) => {
+
+const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize, isMobile) => {
   const offsetMap = new Map()
-  if (!sidebarOpen) return offsetMap
+  if (!sidebarOpen || isMobile) return offsetMap
 
   const clearance = sidebarWidth + 20
   const maxW = Math.max(clearance + 80, winW - pieceSize - 20)
@@ -159,23 +155,30 @@ const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize)
   return offsetMap
 }
 
+// Read saved state once on initial evaluation
+const initialSaved = typeof window !== 'undefined' ? loadGameStateSync() : null
+
 function App() {
-  const [theme, setTheme] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('piecework-theme') || 'dark' : 'dark'))
-  const [image, setImage] = useState(DEFAULT_IMAGE)
-  const [fileName, setFileName] = useState('Mountain study')
-  const [imageMeta, setImageMeta] = useState({ width: 900, height: 900 })
-  const [gridOptions, setGridOptions] = useState(DEFAULT_GRID_OPTIONS)
-  const [gridIndex, setGridIndex] = useState(DEFAULT_GRID_INDEX)
-  const grid = gridOptions[gridIndex]
-  const [moves, setMoves] = useState(0)
-  const [timed, setTimed] = useState(false)
-  const [duration, setDuration] = useState(180)
-  const [remaining, setRemaining] = useState(180)
-  const [status, setStatus] = useState('ready')
+  const [theme, setTheme] = useState(() => initialSaved?.theme || (typeof window !== 'undefined' ? localStorage.getItem('piecework-theme') || 'dark' : 'dark'))
+  const [image, setImage] = useState(() => initialSaved?.image || DEFAULT_IMAGE)
+  const [fileName, setFileName] = useState(() => initialSaved?.fileName || 'Mountain study')
+  const [imageMeta, setImageMeta] = useState(() => initialSaved?.imageMeta || { width: 900, height: 900 })
+  const [gridOptions, setGridOptions] = useState(() => initialSaved?.gridOptions || DEFAULT_GRID_OPTIONS)
+  const [gridIndex, setGridIndex] = useState(() => (typeof initialSaved?.gridIndex === 'number' ? initialSaved.gridIndex : DEFAULT_GRID_INDEX))
+  const grid = gridOptions[gridIndex] || DEFAULT_GRID_OPTIONS[DEFAULT_GRID_INDEX]
+  const [moves, setMoves] = useState(() => initialSaved?.moves ?? 0)
+  const [timed, setTimed] = useState(() => Boolean(initialSaved?.timed))
+  const [duration, setDuration] = useState(() => initialSaved?.duration ?? 180)
+  const [remaining, setRemaining] = useState(() => initialSaved?.remaining ?? 180)
+  const [status, setStatus] = useState(() => initialSaved?.status || 'ready')
   const [showPreview, setShowPreview] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
-  const [showGuide, setShowGuide] = useState(true)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [showGuide, setShowGuide] = useState(() => initialSaved?.showGuide ?? true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const isMobileInit = typeof window !== 'undefined' && window.innerWidth < 768
+    if (isMobileInit) return false
+    return initialSaved?.status !== 'playing'
+  })
   const [windowSize, setWindowSize] = useState({
     width: typeof window !== 'undefined' ? window.innerWidth : 1200,
     height: typeof window !== 'undefined' ? window.innerHeight : 800,
@@ -184,9 +187,17 @@ function App() {
   const [pieces, setPieces] = useState(() => {
     const w = typeof window !== 'undefined' ? window.innerWidth : 1200
     const h = typeof window !== 'undefined' ? window.innerHeight : 800
-    return createInitialPieces(DEFAULT_GRID_OPTIONS[DEFAULT_GRID_INDEX], w, h)
+    const activeGridOptions = initialSaved?.gridOptions || DEFAULT_GRID_OPTIONS
+    const activeGridIndex = typeof initialSaved?.gridIndex === 'number' ? initialSaved.gridIndex : DEFAULT_GRID_INDEX
+    const activeGrid = activeGridOptions[activeGridIndex] || DEFAULT_GRID_OPTIONS[DEFAULT_GRID_INDEX]
+
+    if (initialSaved?.pieces && initialSaved.pieces.length === activeGrid.count) {
+      return adjustPiecesForViewport(initialSaved.pieces, activeGrid, w, h)
+    }
+    return createInitialPieces(activeGrid, w, h)
   })
-  const [maxZ, setMaxZ] = useState(10)
+
+  const [maxZ, setMaxZ] = useState(() => initialSaved?.maxZ ?? 10)
   const [activeGroup, setActiveGroup] = useState(null)
   const [activeGroupOffset, setActiveGroupOffset] = useState(0)
 
@@ -195,18 +206,83 @@ function App() {
   const timers = useRef([])
   const isPlaying = status === 'playing'
 
+  // Restore custom uploaded image from IndexedDB if offloaded
+  useEffect(() => {
+    if (initialSaved?.hasCustomImageInDb) {
+      getIndexedDbItem('custom_image').then((customImg) => {
+        if (customImg) {
+          setImage(customImg)
+        }
+      })
+    }
+  }, [])
+
+  // Keep a reference to latest state for synchronous persistence on page reload/visibilitychange
+  const stateRef = useRef({})
+  useEffect(() => {
+    stateRef.current = {
+      status,
+      moves,
+      timed,
+      duration,
+      remaining,
+      theme,
+      showGuide,
+      fileName,
+      imageMeta,
+      gridIndex,
+      gridOptions,
+      maxZ,
+      pieces,
+      windowSize,
+      image,
+    }
+  })
+
+  const saveCurrentState = (overrides = {}) => {
+    saveGameState({
+      ...stateRef.current,
+      ...overrides,
+    })
+  }
+
+  // Persist game state before page unload or when switching apps on mobile
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveGameState(stateRef.current)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        saveGameState(stateRef.current)
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
   // Persist theme selection
   useEffect(() => {
     localStorage.setItem('piecework-theme', theme)
+    saveCurrentState({ theme })
   }, [theme])
 
-  // Track window resizing
+  // Track window resizing and keep board pieces properly aligned while preserving original spots
   useEffect(() => {
-    const onResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight })
+    const onResize = () => {
+      const nextW = window.innerWidth
+      const nextH = window.innerHeight
+      setWindowSize({ width: nextW, height: nextH })
+      setPieces((prev) => adjustPiecesForViewport(prev, grid, nextW, nextH))
+    }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
-  }, [])
+  }, [grid])
 
+  const isMobile = windowSize.width < 768
   const { pieceSize, boardW, boardH, boardX, boardY } = computeLayout(
     grid,
     windowSize.width,
@@ -214,11 +290,12 @@ function App() {
   )
 
   const sidebarWidth = Math.min(340, windowSize.width * 0.9)
-  const boardShiftX = sidebarOpen ? sidebarWidth / 2 : 0
+  // On mobile screens, the drawer acts as an overlay sheet rather than shifting the board offscreen
+  const boardShiftX = (sidebarOpen && !isMobile) ? sidebarWidth / 2 : 0
 
   const groupOffsets = useMemo(
-    () => computeGroupOffsets(pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize),
-    [pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize]
+    () => computeGroupOffsets(pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize, isMobile),
+    [pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize, isMobile]
   )
 
   const getPieceRenderPos = (p) => {
@@ -239,12 +316,8 @@ function App() {
     }
   }
 
-  // Reset pieces to solved positions
-  const resetPieces = (nextGrid = grid, winW = windowSize.width, winH = windowSize.height) => {
-    setPieces(createInitialPieces(nextGrid, winW, winH))
-  }
 
-  // Timer effect
+  // Timer effect with periodic auto-save
   useEffect(() => {
     if (!timed || !isPlaying) return
     const interval = window.setInterval(() => {
@@ -252,9 +325,14 @@ function App() {
         if (value <= 1) {
           window.clearInterval(interval)
           setStatus('lost')
+          saveCurrentState({ status: 'lost', remaining: 0 })
           return 0
         }
-        return value - 1
+        const nextRemaining = value - 1
+        if (nextRemaining % 5 === 0) {
+          saveCurrentState({ remaining: nextRemaining })
+        }
+        return nextRemaining
       })
     }, 1000)
     return () => window.clearInterval(interval)
@@ -268,10 +346,10 @@ function App() {
 
     // Scatter pieces naturally across the screen
     const scattered = []
-    const marginX = 20
-    const marginY = 60
+    const marginX = 16
+    const marginY = 56
     const maxScatterX = Math.max(marginX, windowSize.width - pieceSize - marginX)
-    const maxScatterY = Math.max(marginY, windowSize.height - pieceSize - 30)
+    const maxScatterY = Math.max(marginY, windowSize.height - pieceSize - 24)
 
     for (let i = 0; i < grid.count; i++) {
       const randX = marginX + Math.random() * (maxScatterX - marginX)
@@ -280,27 +358,60 @@ function App() {
         id: i,
         x: randX,
         y: randY,
+        origX: randX,
+        origY: randY,
         groupId: i + 1, // each starts as its own group
         zIndex: i + 2,
       })
     }
 
+    const nextMaxZ = grid.count + 5
     setPieces(scattered)
-    setMaxZ(grid.count + 5)
+    setMaxZ(nextMaxZ)
     setStatus('playing')
+
+    saveCurrentState({
+      pieces: scattered,
+      moves: 0,
+      remaining: duration,
+      status: 'playing',
+      maxZ: nextMaxZ,
+    })
   }
 
   const resetPuzzle = (nextGrid = grid) => {
     timers.current.forEach(window.clearTimeout)
-    resetPieces(nextGrid)
+    const initial = createInitialPieces(nextGrid, windowSize.width, windowSize.height)
+    setPieces(initial)
     setMoves(0)
     setRemaining(duration)
     setStatus('ready')
+
+    saveCurrentState({
+      pieces: initial,
+      moves: 0,
+      remaining: duration,
+      status: 'ready',
+    })
   }
 
   const setPuzzleSize = (nextIndex) => {
     setGridIndex(nextIndex)
-    resetPuzzle(gridOptions[nextIndex])
+    const nextGrid = gridOptions[nextIndex]
+    timers.current.forEach(window.clearTimeout)
+    const initial = createInitialPieces(nextGrid, windowSize.width, windowSize.height)
+    setPieces(initial)
+    setMoves(0)
+    setRemaining(duration)
+    setStatus('ready')
+
+    saveCurrentState({
+      gridIndex: nextIndex,
+      pieces: initial,
+      moves: 0,
+      remaining: duration,
+      status: 'ready',
+    })
   }
 
   const loadImage = (event) => {
@@ -313,24 +424,55 @@ function App() {
       probe.onload = () => {
         const nextOptions = generateGridOptions(probe.naturalWidth, probe.naturalHeight)
         const nextIndex = closestGridIndex(nextOptions)
+        const nextGrid = nextOptions[nextIndex]
+        const nextMeta = { width: probe.naturalWidth, height: probe.naturalHeight }
+        const nextFileName = file.name.replace(/\.[^.]+$/, '')
+        const resetList = createInitialPieces(nextGrid, windowSize.width, windowSize.height)
+
         setImage(source)
-        setFileName(file.name.replace(/\.[^.]+$/, ''))
-        setImageMeta({ width: probe.naturalWidth, height: probe.naturalHeight })
+        setFileName(nextFileName)
+        setImageMeta(nextMeta)
         setGridOptions(nextOptions)
         setGridIndex(nextIndex)
-        resetPuzzle(nextOptions[nextIndex])
+        setPieces(resetList)
+        setMoves(0)
+        setRemaining(duration)
+        setStatus('ready')
+
+        saveCurrentState({
+          image: source,
+          fileName: nextFileName,
+          imageMeta: nextMeta,
+          gridOptions: nextOptions,
+          gridIndex: nextIndex,
+          pieces: resetList,
+          status: 'ready',
+          moves: 0,
+          remaining: duration,
+        })
       }
       probe.src = source
     }
     reader.readAsDataURL(file)
   }
 
+  const toggleGuide = () => {
+    setShowGuide((prev) => {
+      const next = !prev
+      saveCurrentState({ showGuide: next })
+      return next
+    })
+  }
+
   // Pointer drag interactions
   const onPointerDown = (pieceId, event) => {
     if (!isPlaying && status !== 'ready') return
+    if (event.button !== undefined && event.button !== 0) return
     event.preventDefault()
     const target = event.currentTarget
-    target.setPointerCapture(event.pointerId)
+    try {
+      target.setPointerCapture(event.pointerId)
+    } catch {}
 
     const piece = pieces.find((p) => p.id === pieceId)
     if (!piece) return
@@ -352,6 +494,7 @@ function App() {
 
     dragRef.current = {
       pointerId: event.pointerId,
+      target,
       pieceId,
       groupId: piece.groupId,
       startX: event.clientX,
@@ -390,26 +533,41 @@ function App() {
   }
 
   const onPointerUp = (event) => {
-    if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return
-    const { groupId, moved, groupOffset = 0 } = dragRef.current
+    if (!dragRef.current || (event && dragRef.current.pointerId !== event.pointerId)) return
+    const { target, pointerId, groupId, moved, groupOffset = 0 } = dragRef.current
+    try {
+      target?.releasePointerCapture(pointerId)
+    } catch {}
     dragRef.current = null
     setActiveGroup(null)
     setActiveGroupOffset(0)
 
+    let nextMoves = moves
     if (moved) {
-      setMoves((m) => m + 1)
+      nextMoves = moves + 1
+      setMoves(nextMoves)
     }
 
-    if (!isPlaying) return
+    if (!isPlaying) {
+      let updatedPieces = pieces
+      if (moved) {
+        updatedPieces = pieces.map((p) =>
+          p.groupId === groupId ? { ...p, origX: p.x, origY: p.y } : p
+        )
+        setPieces(updatedPieces)
+      }
+      saveCurrentState({ pieces: updatedPieces, moves: nextMoves })
+      return
+    }
 
     // Perform snapping checks
     setPieces((currentPieces) => {
       const groupPieces = currentPieces.filter((p) => p.groupId === groupId)
-      const snapThreshold = Math.max(22, pieceSize * 0.32)
+      const snapThreshold = Math.max(26, pieceSize * 0.35)
       let snapDelta = null
       let snapTargetGroup = null
 
-      const currentBoardShiftX = sidebarOpen ? sidebarWidth / 2 : 0
+      const currentBoardShiftX = (sidebarOpen && !isMobile) ? sidebarWidth / 2 : 0
 
       // 1. Check snap to target board position
       for (const p of groupPieces) {
@@ -462,15 +620,27 @@ function App() {
         }
       }
 
+      let nextPieces = currentPieces
+      let nextStatus = status
+
       // Apply snap if found
       if (snapDelta) {
+        // Haptic feedback on mobile snap
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          try { navigator.vibrate(25) } catch {}
+        }
+
         const finalGroupId = snapTargetGroup !== null ? snapTargetGroup : groupId
-        const nextPieces = currentPieces.map((p) => {
+        nextPieces = currentPieces.map((p) => {
           if (p.groupId === groupId) {
+            const nextX = p.x + snapDelta.dx
+            const nextY = p.y + snapDelta.dy
             return {
               ...p,
-              x: p.x + snapDelta.dx,
-              y: p.y + snapDelta.dy,
+              x: nextX,
+              y: nextY,
+              origX: nextX,
+              origY: nextY,
               groupId: finalGroupId,
             }
           }
@@ -481,15 +651,67 @@ function App() {
         const firstGroup = nextPieces[0]?.groupId
         const allConnected = nextPieces.every((p) => p.groupId === firstGroup)
         if (allConnected) {
+          nextStatus = 'won'
           setStatus('won')
+          if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            try { navigator.vibrate([40, 50, 70]) } catch {}
+          }
         }
-
-        return nextPieces
+      } else if (moved) {
+        // If not snapped but moved, update original spot to newly dropped position
+        nextPieces = currentPieces.map((p) => {
+          if (p.groupId === groupId) {
+            return {
+              ...p,
+              origX: p.x,
+              origY: p.y,
+            }
+          }
+          return p
+        })
       }
 
-      return currentPieces
+      saveCurrentState({
+        pieces: nextPieces,
+        moves: nextMoves,
+        status: nextStatus,
+        maxZ,
+      })
+
+      return nextPieces
     })
   }
+
+  const pointerHandlersRef = useRef({ onPointerMove, onPointerUp })
+  useEffect(() => {
+    pointerHandlersRef.current = { onPointerMove, onPointerUp }
+  })
+
+  // Window-level event listener fallback for drag reliability on mobile & touch browsers
+  useEffect(() => {
+    if (activeGroup === null) return
+
+    const handleWindowPointerMove = (e) => {
+      if (!dragRef.current || dragRef.current.pointerId !== e.pointerId) return
+      if (e.cancelable) e.preventDefault()
+      pointerHandlersRef.current.onPointerMove(e)
+    }
+
+    const handleWindowPointerUp = (e) => {
+      if (!dragRef.current || dragRef.current.pointerId !== e.pointerId) return
+      pointerHandlersRef.current.onPointerUp(e)
+    }
+
+    window.addEventListener('pointermove', handleWindowPointerMove, { passive: false })
+    window.addEventListener('pointerup', handleWindowPointerUp)
+    window.addEventListener('pointercancel', handleWindowPointerUp)
+
+    return () => {
+      window.removeEventListener('pointermove', handleWindowPointerMove)
+      window.removeEventListener('pointerup', handleWindowPointerUp)
+      window.removeEventListener('pointercancel', handleWindowPointerUp)
+    }
+  }, [activeGroup])
 
   return (
     <main
@@ -502,18 +724,27 @@ function App() {
       {/* Floating HUD Bar */}
       <header className="floating-hud">
         <div className="hud-left">
-          <span className="brand-mark">P</span>
-          <span className="brand-name">Piecework</span>
+          <button
+            className="hud-settings-toggle-btn"
+            type="button"
+            onClick={() => setSidebarOpen((prev) => !prev)}
+            aria-label={sidebarOpen ? 'Close settings drawer' : 'Open settings drawer'}
+            title={sidebarOpen ? 'Close settings' : 'Open settings'}
+          >
+            <span className="brand-mark">P</span>
+            <span className="brand-name">Piecework</span>
+            <span className="hud-gear-icon" aria-hidden="true">⚙️</span>
+          </button>
         </div>
 
         {isPlaying && (
           <div className="hud-center">
             <span className="hud-stat">
-              Moves <strong>{moves}</strong>
+              <span className="stat-label">Moves</span> <strong>{moves}</strong>
             </span>
             {timed && (
               <span className={`hud-stat ${remaining <= 10 ? 'urgent' : ''}`}>
-                Time <strong>{formatTime(remaining)}</strong>
+                <span className="stat-label">Time</span> <strong>{formatTime(remaining)}</strong>
               </span>
             )}
           </div>
@@ -527,18 +758,21 @@ function App() {
             title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           >
-            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+            <span className="btn-icon">{theme === 'dark' ? '☀️' : '🌙'}</span>
+            <span className="btn-text">{theme === 'dark' ? 'Light' : 'Dark'}</span>
           </button>
           <button
             className={`hud-guide-btn ${showGuide ? 'active' : ''}`}
             type="button"
-            onClick={() => setShowGuide((prev) => !prev)}
+            onClick={toggleGuide}
             title="Toggle assembly board guide outline"
           >
-            {showGuide ? 'Guide: On' : 'Guide: Off'}
+            <span className="btn-icon">📐</span>
+            <span className="btn-text">{showGuide ? 'Guide: On' : 'Guide: Off'}</span>
           </button>
           <button className="hud-preview-btn" type="button" onClick={() => setShowPreview(true)}>
-            Peek reference
+            <span className="btn-icon">👁️</span>
+            <span className="btn-text">Peek reference</span>
           </button>
           <button
             className="hud-about-btn"
@@ -546,10 +780,20 @@ function App() {
             onClick={() => setShowAbout(true)}
             title="About the creators"
           >
-            About us
+            <span className="btn-icon">ℹ️</span>
+            <span className="btn-text">About us</span>
           </button>
         </div>
       </header>
+
+      {/* Mobile Backdrop for Settings Drawer */}
+      {sidebarOpen && (
+        <div
+          className="drawer-backdrop"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
       {/* Center Left Arrow Toggle */}
       <button
@@ -640,6 +884,7 @@ function App() {
               className={!timed ? 'active' : ''}
               onClick={() => {
                 setTimed(false)
+                saveCurrentState({ timed: false })
                 resetPuzzle()
               }}
             >
@@ -650,6 +895,7 @@ function App() {
               className={timed ? 'active' : ''}
               onClick={() => {
                 setTimed(true)
+                saveCurrentState({ timed: true })
                 resetPuzzle()
               }}
             >
@@ -665,7 +911,11 @@ function App() {
                   min="10"
                   max="3600"
                   value={duration}
-                  onChange={(event) => setDuration(Math.max(10, Number(event.target.value) || 10))}
+                  onChange={(event) => {
+                    const nextVal = Math.max(10, Number(event.target.value) || 10)
+                    setDuration(nextVal)
+                    saveCurrentState({ duration: nextVal })
+                  }}
                 />{' '}
                 seconds
               </span>
@@ -673,9 +923,16 @@ function App() {
           )}
         </fieldset>
 
-        <button className="primary" type="button" onClick={startGame} disabled={status === 'shuffling'}>
-          {isPlaying || status === 'won' || status === 'lost' ? 'Jumble again' : 'Jumble puzzle'} <span>→</span>
-        </button>
+        <div className="drawer-actions-row">
+          <button className="primary" type="button" onClick={startGame} disabled={status === 'shuffling'}>
+            {isPlaying || status === 'won' || status === 'lost' ? 'Jumble again' : 'Jumble puzzle'} <span>→</span>
+          </button>
+          {isPlaying && (
+            <button className="secondary-action-btn" type="button" onClick={() => resetPuzzle()}>
+              Reset to solved
+            </button>
+          )}
+        </div>
         <p className="hint">Drag pieces freely across the table. Matching pieces snap together naturally.</p>
         <div className="drawer-about-section">
           <button type="button" className="drawer-about-btn" onClick={() => setShowAbout(true)}>
