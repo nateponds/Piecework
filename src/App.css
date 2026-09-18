@@ -64,7 +64,7 @@ html, body, #root {
   opacity: 1;
 }
 
-.brand-mark { width: 24px; height: 24px; display: grid; place-items: center; background: #cc5a40; color: white; border-radius: 2px 7px 7px 7px; font-family: 'DM Mono'; font-size: .75rem; flex-shrink: 0; }
+.brand-mark { width: 24px; height: 24px; display: block; flex-shrink: 0; object-fit: contain; }
 .brand-name { color: #fdfaf3; }
 
 .hud-center { display: flex; align-items: center; gap: 14px; font-family: 'DM Mono'; font-size: .76rem; color: #b2b8b3; }

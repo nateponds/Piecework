@@ -731,7 +731,7 @@ function App() {
             aria-label={sidebarOpen ? 'Close settings drawer' : 'Open settings drawer'}
             title={sidebarOpen ? 'Close settings' : 'Open settings'}
           >
-            <span className="brand-mark">P</span>
+            <img src="/favicon.svg" alt="" className="brand-mark" aria-hidden="true" />
             <span className="brand-name">Piecework</span>
             <span className="hud-gear-icon" aria-hidden="true">⚙️</span>
           </button>
