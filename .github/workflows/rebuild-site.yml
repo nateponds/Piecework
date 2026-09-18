@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: rebuild-site
-  cancel-in-progress: true
+  # Do not let an older queued run cancel a newer deployment.
+  cancel-in-progress: false
 
 env:
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -48,6 +49,12 @@ jobs:
       - name: Deploy
         id: deploy
         run: |
+          main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$main_sha" != "$GITHUB_SHA" ]; then
+            echo "Skipping stale deployment: origin/main is ${main_sha}, run is ${GITHUB_SHA}."
+            exit 0
+          fi
+
           url="$(vercel deploy --prebuilt --prod --yes)"
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "Deployed ${url}"
