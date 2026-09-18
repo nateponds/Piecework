@@ -5,6 +5,7 @@ import {
   generateRandomSeed,
   getPieceEdges,
   getPiecePath,
+  isFreeformPuzzleSolved,
 } from './puzzleModel.js'
 import { getIndexedDbItem, loadGameStateSync, saveGameState } from './storage.js'
 import {
@@ -104,7 +105,7 @@ const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize,
 
   for (const [groupId, groupPieces] of groupMap.entries()) {
     // Check if group is positioned on the board
-    const isGroupOnBoard = groupId === 0 || (
+    const isGroupOnBoard = (
       groupPieces.length > 0 && groupPieces.every((p) => Boolean(p.isOnBoard))
     ) || (
       grid && boardX !== undefined && groupPieces.length > 0 && groupPieces.every((p) => {
@@ -771,40 +772,45 @@ function App() {
             groupsToMerge.add(tableSnapTargetGroupId)
           }
 
-          // Check if any other neighbors on the table also touch any piece in our group
-          for (const p of groupPieces) {
-            const shiftedP = pieceMap.get(p.id)
-            const pCol = shiftedP.id % grid.cols
-            const pRow = Math.floor(shiftedP.id / grid.cols)
-            const neighborSpecs = [
-              { id: shiftedP.id - 1, valid: pCol > 0, expDx: -pieceSize, expDy: 0 },
-              { id: shiftedP.id + 1, valid: pCol < grid.cols - 1, expDx: pieceSize, expDy: 0 },
-              { id: shiftedP.id - grid.cols, valid: pRow > 0, expDx: 0, expDy: -pieceSize },
-              { id: shiftedP.id + grid.cols, valid: pRow < grid.rows - 1, expDx: 0, expDy: pieceSize },
-            ]
+          // Check if any other neighbors on the table also touch any piece in our merged groups
+          let mergedChanged = true
+          while (mergedChanged) {
+            mergedChanged = false
+            for (const p of pieceMap.values()) {
+              if (!groupsToMerge.has(p.groupId)) continue
+              const pCol = p.id % grid.cols
+              const pRow = Math.floor(p.id / grid.cols)
+              const neighborSpecs = [
+                { id: p.id - 1, valid: pCol > 0, expDx: -pieceSize, expDy: 0 },
+                { id: p.id + 1, valid: pCol < grid.cols - 1, expDx: pieceSize, expDy: 0 },
+                { id: p.id - grid.cols, valid: pRow > 0, expDx: 0, expDy: -pieceSize },
+                { id: p.id + grid.cols, valid: pRow < grid.rows - 1, expDx: 0, expDy: pieceSize },
+              ]
 
-            for (const spec of neighborSpecs) {
-              if (!spec.valid) continue
-              const neighbor = pieceMap.get(spec.id)
-              if (neighbor && !groupsToMerge.has(neighbor.groupId)) {
-                const nTarget = getTargetPos(neighbor.id)
-                const nIsOnBoard = Boolean(neighbor.isOnBoard) || Math.hypot(neighbor.x - nTarget.x, neighbor.y - nTarget.y) < 2
-                if (nIsOnBoard) continue
+              for (const spec of neighborSpecs) {
+                if (!spec.valid) continue
+                const neighbor = pieceMap.get(spec.id)
+                if (neighbor && !groupsToMerge.has(neighbor.groupId)) {
+                  const nTarget = getTargetPos(neighbor.id)
+                  const nIsOnBoard = Boolean(neighbor.isOnBoard) || Math.hypot(neighbor.x - nTarget.x, neighbor.y - nTarget.y) < 2
+                  if (nIsOnBoard) continue
 
-                const expNX = shiftedP.x + spec.expDx
-                const expNY = shiftedP.y + spec.expDy
-                if (Math.hypot(neighbor.x - expNX, neighbor.y - expNY) < snapThreshold) {
-                  const deltaAlignX = expNX - neighbor.x
-                  const deltaAlignY = expNY - neighbor.y
-                  const targetGId = neighbor.groupId
-                  groupsToMerge.add(targetGId)
-                  for (const other of pieceMap.values()) {
-                    if (other.groupId === targetGId) {
-                      other.x += deltaAlignX
-                      other.y += deltaAlignY
-                      other.origX = other.x
-                      other.origY = other.y
+                  const expNX = p.x + spec.expDx
+                  const expNY = p.y + spec.expDy
+                  if (Math.hypot(neighbor.x - expNX, neighbor.y - expNY) < snapThreshold) {
+                    const deltaAlignX = expNX - neighbor.x
+                    const deltaAlignY = expNY - neighbor.y
+                    const targetGId = neighbor.groupId
+                    groupsToMerge.add(targetGId)
+                    for (const other of pieceMap.values()) {
+                      if (other.groupId === targetGId) {
+                        other.x += deltaAlignX
+                        other.y += deltaAlignY
+                        other.origX = other.x
+                        other.origY = other.y
+                      }
                     }
+                    mergedChanged = true
                   }
                 }
               }
@@ -826,16 +832,26 @@ function App() {
           return p
         })
 
-        // Check victory: all pieces are correctly placed on the board
-        const allOnBoard = nextPieces.every((p) => {
-          const t = getTargetPos(p.id)
-          return Math.hypot(p.x - t.x, p.y - t.y) < 2
-        })
+        // Check victory:
+        // Consider complete if:
+        // 1) All pieces are placed in the board guide slots, OR
+        // 2) The puzzle is fully assembled into a single finished picture anywhere on the table
+        //    (even if the guide is off or the puzzle is not put in the guide).
+        const puzzleSolved = isFreeformPuzzleSolved(nextPieces, grid, pieceSize, boardX, boardY)
 
-        if (allOnBoard) {
+        if (puzzleSolved) {
           nextStatus = 'won'
           setStatus('won')
-          nextPieces = nextPieces.map((p) => ({ ...p, groupId: 0, isOnBoard: true }))
+          const allOnBoard = nextPieces.every((p) => {
+            const t = getTargetPos(p.id)
+            return Math.hypot(p.x - t.x, p.y - t.y) < 3
+          })
+          const finalIsOnBoard = allOnBoard || Boolean(isBoardSnap)
+          nextPieces = nextPieces.map((p) => ({
+            ...p,
+            groupId: mergedGroupId,
+            isOnBoard: finalIsOnBoard,
+          }))
           if (typeof navigator !== 'undefined' && navigator.vibrate) {
             try { navigator.vibrate([40, 50, 70]) } catch {}
           }
@@ -853,6 +869,15 @@ function App() {
           }
           return p
         })
+
+        const puzzleSolved = isFreeformPuzzleSolved(nextPieces, grid, pieceSize, boardX, boardY)
+        if (puzzleSolved) {
+          nextStatus = 'won'
+          setStatus('won')
+          if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            try { navigator.vibrate([40, 50, 70]) } catch {}
+          }
+        }
       }
 
       saveCurrentState({

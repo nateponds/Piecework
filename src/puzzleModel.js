@@ -184,6 +184,48 @@ export function isSolved(board) {
   return board.length > 0 && board.every((piece, index) => piece === index)
 }
 
+/**
+ * Determines whether a freeform puzzle is solved.
+ * A puzzle is considered solved if:
+ * 1) All pieces exist and are in their designated board guide slots, OR
+ * 2) All pieces are assembled into a single connected group with correct relative offsets
+ *    anywhere on the canvas table (even if the guide is off or the puzzle is not placed inside the guide).
+ */
+export function isFreeformPuzzleSolved(pieces, grid, pieceSize, boardX = null, boardY = null) {
+  if (!pieces || !grid || pieces.length !== grid.count || grid.count === 0) return false
+
+  // Check 1: All pieces placed in the board guide slots
+  if (typeof boardX === 'number' && typeof boardY === 'number') {
+    const allOnBoard = pieces.every((p) => {
+      const col = p.id % grid.cols
+      const row = Math.floor(p.id / grid.cols)
+      const targetX = boardX + col * pieceSize
+      const targetY = boardY + row * pieceSize
+      return Math.hypot(p.x - targetX, p.y - targetY) < 3
+    })
+    if (allOnBoard) return true
+  }
+
+  // Check 2: All pieces connected together in a single group anywhere on the table
+  const firstGroupId = pieces[0].groupId
+  const allSameGroup = pieces.every((p) => p.groupId === firstGroupId)
+  if (!allSameGroup) return false
+
+  const refPiece = pieces[0]
+  const refCol = refPiece.id % grid.cols
+  const refRow = Math.floor(refPiece.id / grid.cols)
+  const originX = refPiece.x - refCol * pieceSize
+  const originY = refPiece.y - refRow * pieceSize
+
+  return pieces.every((p) => {
+    const col = p.id % grid.cols
+    const row = Math.floor(p.id / grid.cols)
+    const expectedX = originX + col * pieceSize
+    const expectedY = originY + row * pieceSize
+    return Math.hypot(p.x - expectedX, p.y - expectedY) < 3
+  })
+}
+
 export function computeLayout(grid, winW, winH) {
   const availW = Math.max(200, winW * 0.82)
   const availH = Math.max(200, winH * 0.78)

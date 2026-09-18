@@ -10,6 +10,7 @@ import {
   getPieceEdges,
   getPiecePath,
   hashSeam,
+  isFreeformPuzzleSolved,
   isSolved,
   movePiece,
   renameBucket,
@@ -376,5 +377,63 @@ test('computeLayout produces integer pieceSize and board coordinates across frac
     assert.ok(Number.isInteger(layout.boardX), `boardX should be integer for ${vp.w}x${vp.h}`)
     assert.ok(Number.isInteger(layout.boardY), `boardY should be integer for ${vp.w}x${vp.h}`)
   }
+})
+
+test('isFreeformPuzzleSolved returns true when puzzle is solved inside board guide', () => {
+  const grid = { rows: 2, cols: 2, count: 4 }
+  const pieceSize = 50
+  const boardX = 200
+  const boardY = 150
+
+  const pieces = [
+    { id: 0, x: 200, y: 150, groupId: 0, isOnBoard: true },
+    { id: 1, x: 250, y: 150, groupId: 0, isOnBoard: true },
+    { id: 2, x: 200, y: 200, groupId: 0, isOnBoard: true },
+    { id: 3, x: 250, y: 200, groupId: 0, isOnBoard: true },
+  ]
+
+  assert.equal(isFreeformPuzzleSolved(pieces, grid, pieceSize, boardX, boardY), true)
+})
+
+test('isFreeformPuzzleSolved returns true when puzzle is finished on the table outside the guide', () => {
+  const grid = { rows: 2, cols: 2, count: 4 }
+  const pieceSize = 60
+  const boardX = 500
+  const boardY = 400
+
+  // Assembled at table coordinates (50, 75), far from board guide (500, 400)
+  const pieces = [
+    { id: 0, x: 50, y: 75, groupId: 9, isOnBoard: false },
+    { id: 1, x: 110, y: 75, groupId: 9, isOnBoard: false },
+    { id: 2, x: 50, y: 135, groupId: 9, isOnBoard: false },
+    { id: 3, x: 110, y: 135, groupId: 9, isOnBoard: false },
+  ]
+
+  // Considers it complete even when board coordinates are provided and guide is off
+  assert.equal(isFreeformPuzzleSolved(pieces, grid, pieceSize, boardX, boardY), true)
+  assert.equal(isFreeformPuzzleSolved(pieces, grid, pieceSize, null, null), true)
+})
+
+test('isFreeformPuzzleSolved returns false when pieces are not in the same group or incomplete', () => {
+  const grid = { rows: 2, cols: 2, count: 4 }
+  const pieceSize = 50
+
+  // 2 pieces are in group 1, 2 in group 2 (partially solved)
+  const partialPieces = [
+    { id: 0, x: 100, y: 100, groupId: 1, isOnBoard: false },
+    { id: 1, x: 150, y: 100, groupId: 1, isOnBoard: false },
+    { id: 2, x: 400, y: 400, groupId: 2, isOnBoard: false },
+    { id: 3, x: 450, y: 400, groupId: 2, isOnBoard: false },
+  ]
+  assert.equal(isFreeformPuzzleSolved(partialPieces, grid, pieceSize), false)
+
+  // All same group, but one piece is misaligned/scrambled
+  const misalignedPieces = [
+    { id: 0, x: 100, y: 100, groupId: 1, isOnBoard: false },
+    { id: 1, x: 150, y: 100, groupId: 1, isOnBoard: false },
+    { id: 2, x: 100, y: 150, groupId: 1, isOnBoard: false },
+    { id: 3, x: 200, y: 200, groupId: 1, isOnBoard: false }, // Wrong spot!
+  ]
+  assert.equal(isFreeformPuzzleSolved(misalignedPieces, grid, pieceSize), false)
 })
 
