@@ -1,6 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { adjustPiecesForViewport, computeLayout, generateGridOptions } from './puzzleModel.js'
+import {
+  computeLayout,
+  generateGridOptions,
+  generateRandomSeed,
+  getPieceEdges,
+  getPiecePath,
+} from './puzzleModel.js'
 import { getIndexedDbItem, loadGameStateSync, saveGameState } from './storage.js'
+import {
+  IconArrowRight,
+  IconCheck,
+  IconClose,
+  IconCopy,
+  IconExternalLink,
+  IconEye,
+  IconGear,
+  IconGrid,
+  IconInfo,
+  IconMail,
+  IconMoon,
+  IconReport,
+  IconSun,
+  IconUpload,
+} from './Icons.jsx'
 import './App.css'
 
 const DEFAULT_IMAGE = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900"><defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#f5c975"/><stop offset="1" stop-color="#f4eee3"/></linearGradient></defs><rect width="900" height="900" fill="url(#sky)"/><circle cx="700" cy="190" r="86" fill="#fff4bf"/><path d="M0 590 210 345 390 525 555 270 900 610V900H0Z" fill="#49655d"/><path d="m390 525 165-255 100 148-49-18-51 52-55-36-64 167Z" fill="#f8f3e8"/><path d="M0 680c165-72 278-57 421 8 151 69 284 21 479-44v256H0Z" fill="#cf5d45"/><path d="M0 748c197-62 331-34 468 22 133 54 264 38 432-20v150H0Z" fill="#eaa85e"/><circle cx="175" cy="190" r="48" fill="#2f4b45" opacity=".85"/><path d="M175 230v210" stroke="#2f4b45" stroke-width="24"/></svg>`)}`
@@ -10,68 +32,14 @@ const DEFAULT_GRID_OPTIONS = generateGridOptions(900, 900)
 const DEFAULT_GRID_INDEX = closestGridIndex(DEFAULT_GRID_OPTIONS)
 const formatTime = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 
-const getSeam = (r1, c1, r2, c2) => {
-  return ((r1 + 1) * 31 + (c1 + 1) * 17 + (r2 + 1) * 59 + (c2 + 1) * 83) % 2 === 0 ? 1 : -1
-}
-
-const getPieceEdges = (piece, rows, cols) => {
-  const row = Math.floor(piece / cols)
-  const col = piece % cols
-  return {
-    top: row === 0 ? 0 : -getSeam(row - 1, col, row, col),
-    right: col === cols - 1 ? 0 : getSeam(row, col, row, col + 1),
-    bottom: row === rows - 1 ? 0 : getSeam(row, col, row + 1, col),
-    left: col === 0 ? 0 : -getSeam(row, col - 1, row, col),
-  }
-}
-
-const generateEdgeSegment = (x1, y1, x2, y2, s) => {
-  if (s === 0) return `L ${x2} ${y2}`
-
-  const dx = x2 - x1
-  const dy = y2 - y1
-  const ux = dx / 100
-  const uy = dy / 100
-  const nx = -uy
-  const ny = ux
-
-  const pt = (u, v) => {
-    const x = (x1 + u * ux + v * nx * s).toFixed(2)
-    const y = (y1 + u * uy + v * ny * s).toFixed(2)
-    return `${x} ${y}`
-  }
-
-  return [
-    `L ${pt(35, 0)}`,
-    `C ${pt(37, 0)}, ${pt(38.5, 3)}, ${pt(39.5, 5.5)}`,
-    `C ${pt(41, 9)}, ${pt(33.5, 13)}, ${pt(34.5, 17.5)}`,
-    `C ${pt(35.5, 22)}, ${pt(43, 23.5)}, ${pt(50, 23.5)}`,
-    `C ${pt(57, 23.5)}, ${pt(64.5, 22)}, ${pt(65.5, 17.5)}`,
-    `C ${pt(66.5, 13)}, ${pt(59, 9)}, ${pt(60.5, 5.5)}`,
-    `C ${pt(61.5, 3)}, ${pt(63, 0)}, ${pt(65, 0)}`,
-    `L ${pt(100, 0)}`,
-  ].join(' ')
-}
-
-const getPiecePath = ({ top, right, bottom, left }) => {
-  return [
-    'M 0 0',
-    generateEdgeSegment(0, 0, 100, 0, top),
-    generateEdgeSegment(100, 0, 100, 100, right),
-    generateEdgeSegment(100, 100, 0, 100, bottom),
-    generateEdgeSegment(0, 100, 0, 0, left),
-    'Z',
-  ].join(' ')
-}
-
-function JigsawPiece({ piece, grid, image, instanceKey }) {
+function JigsawPiece({ piece, grid, image, seed, instanceKey }) {
   const { rows, cols } = grid
   const row = Math.floor(piece / cols)
   const col = piece % cols
-  const path = getPiecePath(getPieceEdges(piece, rows, cols))
-  const clipId = `clip-${instanceKey}-${rows}-${cols}-${piece}`.replace(/[^a-zA-Z0-9-_]/g, '-')
+  const path = getPiecePath(getPieceEdges(piece, rows, cols, seed))
+  const clipId = `clip-${instanceKey}-${rows}-${cols}-${seed}-${piece}`.replace(/[^a-zA-Z0-9-_]/g, '-')
   return (
-    <svg className="jigsaw-svg" viewBox="-25 -25 150 150" preserveAspectRatio="none" aria-hidden="true">
+    <svg className="jigsaw-svg" viewBox="-25 -25 150 150" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       <defs>
         <clipPath id={clipId} clipPathUnits="userSpaceOnUse">
           <path d={path} />
@@ -111,13 +79,14 @@ const createInitialPieces = (grid, winW, winH) => {
       origY: y,
       groupId: 0,
       zIndex: 1,
+      isOnBoard: true,
     })
   }
   return list
 }
 
 
-const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize, isMobile) => {
+const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize, isMobile, grid, boardX, boardY) => {
   const offsetMap = new Map()
   if (!sidebarOpen || isMobile) return offsetMap
 
@@ -134,8 +103,20 @@ const computeGroupOffsets = (pieces, sidebarOpen, sidebarWidth, winW, pieceSize,
   }
 
   for (const [groupId, groupPieces] of groupMap.entries()) {
-    // Solved board group (groupId === 0) moves in sync with the board guide outline
-    if (groupId === 0) {
+    // Check if group is positioned on the board
+    const isGroupOnBoard = groupId === 0 || (
+      groupPieces.length > 0 && groupPieces.every((p) => Boolean(p.isOnBoard))
+    ) || (
+      grid && boardX !== undefined && groupPieces.length > 0 && groupPieces.every((p) => {
+        const col = p.id % grid.cols
+        const row = Math.floor(p.id / grid.cols)
+        const targetX = boardX + col * pieceSize
+        const targetY = boardY + row * pieceSize
+        return Math.hypot(p.x - targetX, p.y - targetY) < 2
+      })
+    )
+
+    if (isGroupOnBoard) {
       offsetMap.set(groupId, sidebarWidth / 2)
       continue
     }
@@ -173,16 +154,31 @@ function App() {
   const [status, setStatus] = useState(() => initialSaved?.status || 'ready')
   const [showPreview, setShowPreview] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [showReport, setShowReport] = useState(false)
+  const [copiedEmail, setCopiedEmail] = useState(false)
+
+  const handleCopyEmail = () => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText('23200114@usc.edu.ph')
+      setCopiedEmail(true)
+      setTimeout(() => setCopiedEmail(false), 2000)
+    }
+  }
   const [showGuide, setShowGuide] = useState(() => initialSaved?.showGuide ?? true)
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     const isMobileInit = typeof window !== 'undefined' && window.innerWidth < 768
     if (isMobileInit) return false
     return initialSaved?.status !== 'playing'
   })
-  const [windowSize, setWindowSize] = useState({
+  const [windowSize, setWindowSize] = useState(() => ({
     width: typeof window !== 'undefined' ? window.innerWidth : 1200,
     height: typeof window !== 'undefined' ? window.innerHeight : 800,
-  })
+  }))
+
+  const [baseViewport, setBaseViewport] = useState(() => ({
+    width: initialSaved?.windowSize?.width || (typeof window !== 'undefined' ? window.innerWidth : 1200),
+    height: initialSaved?.windowSize?.height || (typeof window !== 'undefined' ? window.innerHeight : 800),
+  }))
 
   const [pieces, setPieces] = useState(() => {
     const w = typeof window !== 'undefined' ? window.innerWidth : 1200
@@ -192,11 +188,26 @@ function App() {
     const activeGrid = activeGridOptions[activeGridIndex] || DEFAULT_GRID_OPTIONS[DEFAULT_GRID_INDEX]
 
     if (initialSaved?.pieces && initialSaved.pieces.length === activeGrid.count) {
-      return adjustPiecesForViewport(initialSaved.pieces, activeGrid, w, h)
+      const savedW = initialSaved?.windowSize?.width || w
+      const savedH = initialSaved?.windowSize?.height || h
+      const savedLayout = computeLayout(activeGrid, savedW, savedH)
+      const currentBoardX = Math.round((w - savedLayout.boardW) / 2)
+      const currentBoardY = Math.round((h - savedLayout.boardH) / 2 + 10)
+      const deltaX = currentBoardX - savedLayout.boardX
+      const deltaY = currentBoardY - savedLayout.boardY
+
+      return initialSaved.pieces.map((p) => ({
+        ...p,
+        x: p.x + deltaX,
+        y: p.y + deltaY,
+        origX: (p.origX ?? p.x) + deltaX,
+        origY: (p.origY ?? p.y) + deltaY,
+      }))
     }
     return createInitialPieces(activeGrid, w, h)
   })
 
+  const [seed, setSeed] = useState(() => (typeof initialSaved?.seed === 'number' ? initialSaved.seed : generateRandomSeed()))
   const [maxZ, setMaxZ] = useState(() => initialSaved?.maxZ ?? 10)
   const [activeGroup, setActiveGroup] = useState(null)
   const [activeGroupOffset, setActiveGroupOffset] = useState(0)
@@ -236,6 +247,7 @@ function App() {
       pieces,
       windowSize,
       image,
+      seed,
     }
   })
 
@@ -270,32 +282,70 @@ function App() {
     saveCurrentState({ theme })
   }, [theme])
 
-  // Track window resizing and keep board pieces properly aligned while preserving original spots
+  const baseLayout = useMemo(
+    () => computeLayout(grid, baseViewport.width, baseViewport.height),
+    [grid, baseViewport.width, baseViewport.height]
+  )
+
+  const pieceSize = baseLayout.pieceSize
+  const boardW = grid.cols * pieceSize
+  const boardH = grid.rows * pieceSize
+  const boardX = Math.round((windowSize.width - boardW) / 2)
+  const boardY = Math.round((windowSize.height - boardH) / 2 + 10)
+
+  const lastBoardRef = useRef({ boardX, boardY })
+  const [isResizing, setIsResizing] = useState(false)
+  const resizeTimeoutRef = useRef(null)
+
+  useEffect(() => {
+    lastBoardRef.current = { boardX, boardY }
+  }, [boardX, boardY])
+
+  // Track window resizing and keep board and all pieces centered together without jumbling or stacking
   useEffect(() => {
     const onResize = () => {
       const nextW = window.innerWidth
       const nextH = window.innerHeight
+      const newBoardX = Math.round((nextW - boardW) / 2)
+      const newBoardY = Math.round((nextH - boardH) / 2 + 10)
+      const deltaX = newBoardX - lastBoardRef.current.boardX
+      const deltaY = newBoardY - lastBoardRef.current.boardY
+
+      lastBoardRef.current = { boardX: newBoardX, boardY: newBoardY }
+      setIsResizing(true)
+      if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current)
+      resizeTimeoutRef.current = window.setTimeout(() => setIsResizing(false), 150)
+
       setWindowSize({ width: nextW, height: nextH })
-      setPieces((prev) => adjustPiecesForViewport(prev, grid, nextW, nextH))
+
+      if (deltaX !== 0 || deltaY !== 0) {
+        setPieces((prev) =>
+          prev.map((p) => ({
+            ...p,
+            x: p.x + deltaX,
+            y: p.y + deltaY,
+            origX: (p.origX ?? p.x) + deltaX,
+            origY: (p.origY ?? p.y) + deltaY,
+          }))
+        )
+      }
     }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [grid])
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (resizeTimeoutRef.current) window.clearTimeout(resizeTimeoutRef.current)
+    }
+  }, [boardW, boardH])
 
   const isMobile = windowSize.width < 768
-  const { pieceSize, boardW, boardH, boardX, boardY } = computeLayout(
-    grid,
-    windowSize.width,
-    windowSize.height
-  )
 
   const sidebarWidth = Math.min(340, windowSize.width * 0.9)
   // On mobile screens, the drawer acts as an overlay sheet rather than shifting the board offscreen
   const boardShiftX = (sidebarOpen && !isMobile) ? sidebarWidth / 2 : 0
 
   const groupOffsets = useMemo(
-    () => computeGroupOffsets(pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize, isMobile),
-    [pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize, isMobile]
+    () => computeGroupOffsets(pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize, isMobile, grid, boardX, boardY),
+    [pieces, sidebarOpen, sidebarWidth, windowSize.width, pieceSize, isMobile, grid, boardX, boardY]
   )
 
   const getPieceRenderPos = (p) => {
@@ -343,13 +393,26 @@ function App() {
     setSidebarOpen(false)
     setMoves(0)
     setRemaining(duration)
+    const nextSeed = generateRandomSeed()
+    setSeed(nextSeed)
+
+    const curW = windowSize.width
+    const curH = windowSize.height
+    setBaseViewport({ width: curW, height: curH })
+    const freshLayout = computeLayout(grid, curW, curH)
+    const curPieceSize = freshLayout.pieceSize
+    const curBoardW = grid.cols * curPieceSize
+    const curBoardH = grid.rows * curPieceSize
+    const curBoardX = Math.round((curW - curBoardW) / 2)
+    const curBoardY = Math.round((curH - curBoardH) / 2 + 10)
+    lastBoardRef.current = { boardX: curBoardX, boardY: curBoardY }
 
     // Scatter pieces naturally across the screen
     const scattered = []
     const marginX = 16
     const marginY = 56
-    const maxScatterX = Math.max(marginX, windowSize.width - pieceSize - marginX)
-    const maxScatterY = Math.max(marginY, windowSize.height - pieceSize - 24)
+    const maxScatterX = Math.max(marginX, curW - curPieceSize - marginX)
+    const maxScatterY = Math.max(marginY, curH - curPieceSize - 24)
 
     for (let i = 0; i < grid.count; i++) {
       const randX = marginX + Math.random() * (maxScatterX - marginX)
@@ -362,6 +425,7 @@ function App() {
         origY: randY,
         groupId: i + 1, // each starts as its own group
         zIndex: i + 2,
+        isOnBoard: false,
       })
     }
 
@@ -376,12 +440,18 @@ function App() {
       remaining: duration,
       status: 'playing',
       maxZ: nextMaxZ,
+      seed: nextSeed,
     })
   }
 
   const resetPuzzle = (nextGrid = grid) => {
     timers.current.forEach(window.clearTimeout)
-    const initial = createInitialPieces(nextGrid, windowSize.width, windowSize.height)
+    const curW = windowSize.width
+    const curH = windowSize.height
+    setBaseViewport({ width: curW, height: curH })
+    const freshLayout = computeLayout(nextGrid, curW, curH)
+    lastBoardRef.current = { boardX: freshLayout.boardX, boardY: freshLayout.boardY }
+    const initial = createInitialPieces(nextGrid, curW, curH)
     setPieces(initial)
     setMoves(0)
     setRemaining(duration)
@@ -399,7 +469,14 @@ function App() {
     setGridIndex(nextIndex)
     const nextGrid = gridOptions[nextIndex]
     timers.current.forEach(window.clearTimeout)
-    const initial = createInitialPieces(nextGrid, windowSize.width, windowSize.height)
+    const curW = windowSize.width
+    const curH = windowSize.height
+    setBaseViewport({ width: curW, height: curH })
+    const freshLayout = computeLayout(nextGrid, curW, curH)
+    lastBoardRef.current = { boardX: freshLayout.boardX, boardY: freshLayout.boardY }
+    const initial = createInitialPieces(nextGrid, curW, curH)
+    const nextSeed = generateRandomSeed()
+    setSeed(nextSeed)
     setPieces(initial)
     setMoves(0)
     setRemaining(duration)
@@ -411,6 +488,7 @@ function App() {
       moves: 0,
       remaining: duration,
       status: 'ready',
+      seed: nextSeed,
     })
   }
 
@@ -427,13 +505,20 @@ function App() {
         const nextGrid = nextOptions[nextIndex]
         const nextMeta = { width: probe.naturalWidth, height: probe.naturalHeight }
         const nextFileName = file.name.replace(/\.[^.]+$/, '')
-        const resetList = createInitialPieces(nextGrid, windowSize.width, windowSize.height)
+        const curW = windowSize.width
+        const curH = windowSize.height
+        setBaseViewport({ width: curW, height: curH })
+        const freshLayout = computeLayout(nextGrid, curW, curH)
+        lastBoardRef.current = { boardX: freshLayout.boardX, boardY: freshLayout.boardY }
+        const resetList = createInitialPieces(nextGrid, curW, curH)
+        const nextSeed = generateRandomSeed()
 
         setImage(source)
         setFileName(nextFileName)
         setImageMeta(nextMeta)
         setGridOptions(nextOptions)
         setGridIndex(nextIndex)
+        setSeed(nextSeed)
         setPieces(resetList)
         setMoves(0)
         setRemaining(duration)
@@ -449,6 +534,7 @@ function App() {
           status: 'ready',
           moves: 0,
           remaining: duration,
+          seed: nextSeed,
         })
       }
       probe.src = source
@@ -552,7 +638,7 @@ function App() {
       let updatedPieces = pieces
       if (moved) {
         updatedPieces = pieces.map((p) =>
-          p.groupId === groupId ? { ...p, origX: p.x, origY: p.y } : p
+          p.groupId === groupId ? { ...p, origX: p.x, origY: p.y, isOnBoard: false } : p
         )
         setPieces(updatedPieces)
       }
@@ -565,7 +651,8 @@ function App() {
       const groupPieces = currentPieces.filter((p) => p.groupId === groupId)
       const snapThreshold = Math.max(26, pieceSize * 0.35)
       let snapDelta = null
-      let snapTargetGroup = null
+      let isBoardSnap = false
+      let tableSnapTargetGroupId = null
 
       const currentBoardShiftX = (sidebarOpen && !isMobile) ? sidebarWidth / 2 : 0
 
@@ -577,7 +664,7 @@ function App() {
         const dist = Math.hypot(pVisualX - targetVisualX, p.y - target.y)
         if (dist < snapThreshold) {
           snapDelta = { dx: target.x - p.x, dy: target.y - p.y }
-          snapTargetGroup = 0 // Snap to the master board group
+          isBoardSnap = true
           break
         }
       }
@@ -600,6 +687,10 @@ function App() {
             if (!nInfo.valid) continue
             const neighbor = currentPieces.find((item) => item.id === nInfo.id)
             if (neighbor && neighbor.groupId !== groupId) {
+              const nTarget = getTargetPos(neighbor.id)
+              const nIsOnBoard = Boolean(neighbor.isOnBoard) || Math.hypot(neighbor.x - nTarget.x, neighbor.y - nTarget.y) < 2
+              if (nIsOnBoard) continue
+
               const neighborOffset = groupOffsets.get(neighbor.groupId) || 0
               const pVisualX = p.x + groupOffset
               const neighborVisualX = neighbor.x + neighborOffset
@@ -611,7 +702,7 @@ function App() {
                   dx: neighbor.x - nInfo.expDx - p.x,
                   dy: expectedVisualY - p.y,
                 }
-                snapTargetGroup = neighbor.groupId
+                tableSnapTargetGroupId = neighbor.groupId
                 break
               }
             }
@@ -630,29 +721,121 @@ function App() {
           try { navigator.vibrate(25) } catch {}
         }
 
-        const finalGroupId = snapTargetGroup !== null ? snapTargetGroup : groupId
-        nextPieces = currentPieces.map((p) => {
+        // Build a map of all pieces with the dragged group shifted to its snapped position
+        const pieceMap = new Map()
+        for (const p of currentPieces) {
           if (p.groupId === groupId) {
             const nextX = p.x + snapDelta.dx
             const nextY = p.y + snapDelta.dy
-            return {
+            pieceMap.set(p.id, {
               ...p,
               x: nextX,
               y: nextY,
               origX: nextX,
               origY: nextY,
-              groupId: finalGroupId,
+            })
+          } else {
+            pieceMap.set(p.id, { ...p })
+          }
+        }
+
+        const groupsToMerge = new Set([groupId])
+
+        if (isBoardSnap) {
+          // On the board: only merge with adjacent orthogonal neighbors that are ALSO currently
+          // placed in their correct slots on the board!
+          for (const p of groupPieces) {
+            const shiftedP = pieceMap.get(p.id)
+            const pCol = shiftedP.id % grid.cols
+            const pRow = Math.floor(shiftedP.id / grid.cols)
+            const neighborIds = [
+              pCol > 0 ? shiftedP.id - 1 : null,
+              pCol < grid.cols - 1 ? shiftedP.id + 1 : null,
+              pRow > 0 ? shiftedP.id - grid.cols : null,
+              pRow < grid.rows - 1 ? shiftedP.id + grid.cols : null,
+            ].filter((id) => id !== null)
+
+            for (const nId of neighborIds) {
+              const neighbor = pieceMap.get(nId)
+              if (neighbor && neighbor.groupId !== groupId) {
+                const nTarget = getTargetPos(neighbor.id)
+                if (Math.hypot(neighbor.x - nTarget.x, neighbor.y - nTarget.y) < 2) {
+                  groupsToMerge.add(neighbor.groupId)
+                }
+              }
+            }
+          }
+        } else {
+          // On the table: merge with the snapped neighbor
+          if (tableSnapTargetGroupId !== null) {
+            groupsToMerge.add(tableSnapTargetGroupId)
+          }
+
+          // Check if any other neighbors on the table also touch any piece in our group
+          for (const p of groupPieces) {
+            const shiftedP = pieceMap.get(p.id)
+            const pCol = shiftedP.id % grid.cols
+            const pRow = Math.floor(shiftedP.id / grid.cols)
+            const neighborSpecs = [
+              { id: shiftedP.id - 1, valid: pCol > 0, expDx: -pieceSize, expDy: 0 },
+              { id: shiftedP.id + 1, valid: pCol < grid.cols - 1, expDx: pieceSize, expDy: 0 },
+              { id: shiftedP.id - grid.cols, valid: pRow > 0, expDx: 0, expDy: -pieceSize },
+              { id: shiftedP.id + grid.cols, valid: pRow < grid.rows - 1, expDx: 0, expDy: pieceSize },
+            ]
+
+            for (const spec of neighborSpecs) {
+              if (!spec.valid) continue
+              const neighbor = pieceMap.get(spec.id)
+              if (neighbor && !groupsToMerge.has(neighbor.groupId)) {
+                const nTarget = getTargetPos(neighbor.id)
+                const nIsOnBoard = Boolean(neighbor.isOnBoard) || Math.hypot(neighbor.x - nTarget.x, neighbor.y - nTarget.y) < 2
+                if (nIsOnBoard) continue
+
+                const expNX = shiftedP.x + spec.expDx
+                const expNY = shiftedP.y + spec.expDy
+                if (Math.hypot(neighbor.x - expNX, neighbor.y - expNY) < snapThreshold) {
+                  const deltaAlignX = expNX - neighbor.x
+                  const deltaAlignY = expNY - neighbor.y
+                  const targetGId = neighbor.groupId
+                  groupsToMerge.add(targetGId)
+                  for (const other of pieceMap.values()) {
+                    if (other.groupId === targetGId) {
+                      other.x += deltaAlignX
+                      other.y += deltaAlignY
+                      other.origX = other.x
+                      other.origY = other.y
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Pick a consistent merged group ID
+        const mergedGroupId = Array.from(groupsToMerge).sort((a, b) => a - b)[0]
+
+        nextPieces = Array.from(pieceMap.values()).map((p) => {
+          if (groupsToMerge.has(p.groupId)) {
+            return {
+              ...p,
+              groupId: mergedGroupId,
+              isOnBoard: isBoardSnap,
             }
           }
           return p
         })
 
-        // Check victory: all pieces belong to the same group or are correctly snapped
-        const firstGroup = nextPieces[0]?.groupId
-        const allConnected = nextPieces.every((p) => p.groupId === firstGroup)
-        if (allConnected) {
+        // Check victory: all pieces are correctly placed on the board
+        const allOnBoard = nextPieces.every((p) => {
+          const t = getTargetPos(p.id)
+          return Math.hypot(p.x - t.x, p.y - t.y) < 2
+        })
+
+        if (allOnBoard) {
           nextStatus = 'won'
           setStatus('won')
+          nextPieces = nextPieces.map((p) => ({ ...p, groupId: 0, isOnBoard: true }))
           if (typeof navigator !== 'undefined' && navigator.vibrate) {
             try { navigator.vibrate([40, 50, 70]) } catch {}
           }
@@ -665,6 +848,7 @@ function App() {
               ...p,
               origX: p.x,
               origY: p.y,
+              isOnBoard: false,
             }
           }
           return p
@@ -733,7 +917,9 @@ function App() {
           >
             <img src="/favicon.svg" alt="" className="brand-mark" aria-hidden="true" />
             <span className="brand-name">Piecework</span>
-            <span className="hud-gear-icon" aria-hidden="true">⚙️</span>
+            <span className="hud-gear-icon" aria-hidden="true">
+              <IconGear />
+            </span>
           </button>
         </div>
 
@@ -758,7 +944,7 @@ function App() {
             title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           >
-            <span className="btn-icon">{theme === 'dark' ? '☀️' : '🌙'}</span>
+            <span className="btn-icon">{theme === 'dark' ? <IconSun /> : <IconMoon />}</span>
             <span className="btn-text">{theme === 'dark' ? 'Light' : 'Dark'}</span>
           </button>
           <button
@@ -767,11 +953,20 @@ function App() {
             onClick={toggleGuide}
             title="Toggle assembly board guide outline"
           >
-            <span className="btn-icon">📐</span>
+            <span className="btn-icon">
+              <IconGrid />
+            </span>
             <span className="btn-text">{showGuide ? 'Guide: On' : 'Guide: Off'}</span>
           </button>
-          <button className="hud-preview-btn" type="button" onClick={() => setShowPreview(true)}>
-            <span className="btn-icon">👁️</span>
+          <button
+            className="hud-preview-btn"
+            type="button"
+            onClick={() => setShowPreview(true)}
+            title="Peek reference image"
+          >
+            <span className="btn-icon">
+              <IconEye />
+            </span>
             <span className="btn-text">Peek reference</span>
           </button>
           <button
@@ -780,8 +975,21 @@ function App() {
             onClick={() => setShowAbout(true)}
             title="About the creators"
           >
-            <span className="btn-icon">ℹ️</span>
+            <span className="btn-icon">
+              <IconInfo />
+            </span>
             <span className="btn-text">About us</span>
+          </button>
+          <button
+            className="hud-report-btn"
+            type="button"
+            onClick={() => setShowReport(true)}
+            title="Report an issue or send feedback"
+          >
+            <span className="btn-icon">
+              <IconReport />
+            </span>
+            <span className="btn-text">Report</span>
           </button>
         </div>
       </header>
@@ -829,13 +1037,15 @@ function App() {
             aria-label="Close sidebar"
             title="Close sidebar"
           >
-            ✕
+            <IconClose />
           </button>
         </div>
         <h1>Make the pieces yours.</h1>
         <p className="intro">Upload a PNG, JPEG, or WebP. Your image stays in this browser.</p>
         <button className="upload" type="button" onClick={() => inputRef.current?.click()}>
-          <span className="upload-icon">↥</span>
+          <span className="upload-icon">
+            <IconUpload />
+          </span>
           <span>
             <strong>Choose an image</strong>
             <small>PNG, JPEG or WEBP</small>
@@ -925,7 +1135,10 @@ function App() {
 
         <div className="drawer-actions-row">
           <button className="primary" type="button" onClick={startGame} disabled={status === 'shuffling'}>
-            {isPlaying || status === 'won' || status === 'lost' ? 'Jumble again' : 'Jumble puzzle'} <span>→</span>
+            {isPlaying || status === 'won' || status === 'lost' ? 'Jumble again' : 'Jumble puzzle'}{' '}
+            <span className="btn-arrow-icon">
+              <IconArrowRight />
+            </span>
           </button>
           {isPlaying && (
             <button className="secondary-action-btn" type="button" onClick={() => resetPuzzle()}>
@@ -937,7 +1150,15 @@ function App() {
         <div className="drawer-about-section">
           <button type="button" className="drawer-about-btn" onClick={() => setShowAbout(true)}>
             <span>About the creators</span>
-            <span className="creator-names-chip">Nate &amp; Swashua ↗</span>
+            <span className="creator-names-chip">
+              Nate &amp; Swashua <IconExternalLink />
+            </span>
+          </button>
+          <button type="button" className="drawer-about-btn drawer-report-btn" onClick={() => setShowReport(true)}>
+            <span>Report an issue</span>
+            <span className="creator-names-chip">
+              Support <IconReport />
+            </span>
           </button>
         </div>
       </aside>
@@ -954,12 +1175,17 @@ function App() {
             transform: `translateX(${boardShiftX}px)`,
           }}
         >
-          <div className="guide-inner-grid" />
+          <div
+            className="guide-inner-grid"
+            style={{
+              backgroundSize: `${pieceSize}px ${pieceSize}px`,
+            }}
+          />
         </div>
       )}
 
       {/* Freeform Pieces Canvas */}
-      <div className="pieces-table-surface">
+      <div className={`pieces-table-surface ${isResizing ? 'resizing' : ''}`}>
         {pieces.map((p) => {
           const isGroupActive = activeGroup !== null && p.groupId === activeGroup
           const pos = getPieceRenderPos(p)
@@ -975,7 +1201,7 @@ function App() {
               }}
               onPointerDown={(event) => onPointerDown(p.id, event)}
             >
-              <JigsawPiece piece={p.id} grid={grid} image={image} instanceKey={`p-${p.id}`} />
+              <JigsawPiece piece={p.id} grid={grid} image={image} seed={seed} instanceKey={`p-${p.id}`} />
             </div>
           )
         })}
@@ -1029,7 +1255,7 @@ function App() {
                 aria-label="Close about modal"
                 title="Close"
               >
-                ✕
+                <IconClose />
               </button>
             </div>
 
@@ -1058,7 +1284,9 @@ function App() {
                   <div className="creator-handle">@nateponds</div>
                   <div className="creator-role">Co-Creator &amp; Developer</div>
                 </div>
-                <span className="creator-gh-btn">GitHub ↗</span>
+                <span className="creator-gh-btn">
+                  GitHub <IconExternalLink />
+                </span>
               </a>
 
               <a
@@ -1078,12 +1306,92 @@ function App() {
                   <div className="creator-handle">@Swashua</div>
                   <div className="creator-role">Co-Creator &amp; Developer</div>
                 </div>
-                <span className="creator-gh-btn">GitHub ↗</span>
+                <span className="creator-gh-btn">
+                  GitHub <IconExternalLink />
+                </span>
               </a>
             </div>
 
             <div className="about-footer">
               <button type="button" className="about-done-btn" onClick={() => setShowAbout(false)}>
+                Back to Puzzle
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report Issue & Feedback Modal */}
+      {showReport && (
+        <div
+          className="about-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Report an issue or send feedback"
+          onClick={() => setShowReport(false)}
+        >
+          <div className="about-modal-card report-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="about-header">
+              <span className="about-badge">Report &amp; Feedback</span>
+              <button
+                type="button"
+                className="about-close-btn"
+                onClick={() => setShowReport(false)}
+                aria-label="Close report modal"
+                title="Close"
+              >
+                <IconClose />
+              </button>
+            </div>
+
+            <h2>Report an issue</h2>
+            <p className="about-intro">
+              Found a bug, visual glitch, or have an idea to make Piecework better?
+              Please email it directly to our team:
+            </p>
+
+            <div className="report-email-card">
+              <div className="report-email-content">
+                <span className="report-email-label">Send your report to</span>
+                <a
+                  href="mailto:23200114@usc.edu.ph?subject=Piecework%20Puzzle%20Report"
+                  className="report-email-address"
+                  title="Click to compose email"
+                >
+                  23200114@usc.edu.ph
+                </a>
+              </div>
+              <button
+                type="button"
+                className="report-copy-btn"
+                onClick={handleCopyEmail}
+                title="Copy email to clipboard"
+                aria-label="Copy email address"
+              >
+                {copiedEmail ? (
+                  <>
+                    <IconCheck /> Copied!
+                  </>
+                ) : (
+                  <>
+                    <IconCopy /> Copy
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="report-modal-actions">
+              <a
+                href="mailto:23200114@usc.edu.ph?subject=Piecework%20Puzzle%20Report"
+                className="primary-link-btn"
+              >
+                <IconMail /> Compose Email
+              </a>
+              <button
+                type="button"
+                className="about-done-btn"
+                onClick={() => setShowReport(false)}
+              >
                 Back to Puzzle
               </button>
             </div>

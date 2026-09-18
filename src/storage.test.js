@@ -50,6 +50,7 @@ test('saveGameState stores state and loadGameStateSync restores it', () => {
     ],
     windowSize: { width: 400, height: 800 },
     image: 'data:image/svg+xml;utf8,<svg></svg>',
+    seed: 98765,
   }
 
   saveGameState(dummyState)
@@ -60,6 +61,7 @@ test('saveGameState stores state and loadGameStateSync restores it', () => {
   assert.equal(loaded.moves, 7)
   assert.equal(loaded.timed, true)
   assert.equal(loaded.remaining, 150)
+  assert.equal(loaded.seed, 98765)
   assert.equal(loaded.pieces.length, 2)
   assert.equal(loaded.pieces[0].id, 0)
   assert.equal(loaded.pieces[0].x, 100.2)

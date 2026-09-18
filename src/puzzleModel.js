@@ -1,5 +1,106 @@
 let bucketCounter = 0
 
+export function generateRandomSeed() {
+  return Math.floor(Math.random() * 2147483647)
+}
+
+/**
+ * Fast 32-bit hash function (Murmur3 finalizer mix) that deterministically
+ * produces either +1 (hole) or -1 (tab) for any interior seam.
+ */
+export function hashSeam(typeOrR1, rOrC1, cOrR2, seedOrC2 = 12345, seedMaybe = 12345) {
+  let type, r, c, seed
+  if (typeof typeOrR1 === 'string') {
+    type = typeOrR1
+    r = rOrC1
+    c = cOrR2
+    seed = seedOrC2
+  } else {
+    // Coordinate signature: (r1, c1, r2, c2, seed)
+    const r1 = typeOrR1
+    const c1 = rOrC1
+    const r2 = cOrR2
+    const c2 = seedOrC2
+    seed = seedMaybe
+    if (r1 === r2) {
+      type = 'v'
+      r = r1
+      c = Math.min(c1, c2)
+    } else {
+      type = 'h'
+      r = Math.min(r1, r2)
+      c = c1
+    }
+  }
+
+  let h = (seed ^ (type === 'h' ? 0x12345678 : 0x87654321) ^ (r * 73856093) ^ (c * 19349663)) >>> 0
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  h = (h ^ (h >>> 16)) >>> 0
+  return (h & 1) === 0 ? 1 : -1
+}
+
+export const getSeam = hashSeam
+
+/**
+ * Calculates edge configurations for a puzzle piece.
+ * Outer boundaries are strictly flat (0).
+ * Interior seams are randomized tabs (-1) or holes (+1) that perfectly match adjacent pieces.
+ * Corner pieces have 2 flat outer edges.
+ * Edge pieces have 1 flat outer edge.
+ * Interior pieces have 0 flat edges.
+ */
+export function getPieceEdges(piece, rows, cols, seed = 12345) {
+  const row = Math.floor(piece / cols)
+  const col = piece % cols
+
+  return {
+    top: row === 0 ? 0 : -hashSeam('h', row - 1, col, seed),
+    right: col === cols - 1 ? 0 : hashSeam('v', row, col, seed),
+    bottom: row === rows - 1 ? 0 : hashSeam('h', row, col, seed),
+    left: col === 0 ? 0 : -hashSeam('v', row, col - 1, seed),
+  }
+}
+
+export function generateEdgeSegment(x1, y1, x2, y2, s) {
+  if (s === 0) return `L ${x2} ${y2}`
+
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const ux = dx / 100
+  const uy = dy / 100
+  const nx = -uy
+  const ny = ux
+
+  const pt = (u, v) => {
+    const x = (x1 + u * ux + v * nx * s).toFixed(2)
+    const y = (y1 + u * uy + v * ny * s).toFixed(2)
+    return `${x} ${y}`
+  }
+
+  return [
+    `L ${pt(35, 0)}`,
+    `C ${pt(37, 0)}, ${pt(38.5, 3)}, ${pt(39.5, 5.5)}`,
+    `C ${pt(41, 9)}, ${pt(33.5, 13)}, ${pt(34.5, 17.5)}`,
+    `C ${pt(35.5, 22)}, ${pt(43, 23.5)}, ${pt(50, 23.5)}`,
+    `C ${pt(57, 23.5)}, ${pt(64.5, 22)}, ${pt(65.5, 17.5)}`,
+    `C ${pt(66.5, 13)}, ${pt(59, 9)}, ${pt(60.5, 5.5)}`,
+    `C ${pt(61.5, 3)}, ${pt(63, 0)}, ${pt(65, 0)}`,
+    `L ${pt(100, 0)}`,
+  ].join(' ')
+}
+
+export function getPiecePath({ top, right, bottom, left }) {
+  return [
+    'M 0 0',
+    generateEdgeSegment(0, 0, 100, 0, top),
+    generateEdgeSegment(100, 0, 100, 100, right),
+    generateEdgeSegment(100, 100, 0, 100, bottom),
+    generateEdgeSegment(0, 100, 0, 0, left),
+    'Z',
+  ].join(' ')
+}
+
 export function generateGridOptions(width, height, minPieces = 50, maxPieces = 1000) {
   const aspect = Number.isFinite(width / height) && width > 0 && height > 0 ? width / height : 1
   const options = []
@@ -86,11 +187,11 @@ export function isSolved(board) {
 export function computeLayout(grid, winW, winH) {
   const availW = Math.max(200, winW * 0.82)
   const availH = Math.max(200, winH * 0.78)
-  const pieceSize = Math.max(28, Math.min(availW / grid.cols, availH / grid.rows, 160))
+  const pieceSize = Math.round(Math.max(28, Math.min(availW / grid.cols, availH / grid.rows, 160)))
   const boardW = grid.cols * pieceSize
   const boardH = grid.rows * pieceSize
-  const boardX = (winW - boardW) / 2
-  const boardY = (winH - boardH) / 2 + 10
+  const boardX = Math.round((winW - boardW) / 2)
+  const boardY = Math.round((winH - boardH) / 2 + 10)
   return { pieceSize, boardW, boardH, boardX, boardY }
 }
 
@@ -115,8 +216,12 @@ export function adjustPiecesForViewport(pieces, grid, winW, winH) {
   const result = []
 
   for (const [groupId, groupPieces] of groupMap.entries()) {
-    if (groupId === 0) {
-      // Solved board group: always lock directly to current board slots
+    const isGroupOnBoard = groupId === 0 || (
+      groupPieces.length > 0 && groupPieces.every((p) => Boolean(p.isOnBoard))
+    )
+
+    if (isGroupOnBoard) {
+      // Board group: always lock directly to current board slots
       for (const p of groupPieces) {
         const col = p.id % grid.cols
         const row = Math.floor(p.id / grid.cols)

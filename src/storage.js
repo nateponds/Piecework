@@ -115,10 +115,12 @@ export function saveGameState(state) {
       origX: Math.round((p.origX ?? p.x) * 10) / 10,
       origY: Math.round((p.origY ?? p.y) * 10) / 10,
       groupId: p.groupId,
+      isOnBoard: Boolean(p.isOnBoard),
       zIndex: p.zIndex,
     })),
     windowSize: state.windowSize,
     image: state.image,
+    seed: state.seed,
     hasCustomImageInDb: false,
   }
 
